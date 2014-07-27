@@ -2,21 +2,35 @@
 
 module GCC where
 
-import Data.Int(Int32)   -- Signed 32-bit integer.
-import Data.Word(Word32) -- Unsigned 32-bit integer.
+import Data.Int(Int32)
+import Data.Word(Word32)
 
-newtype Size = Size Word32 deriving (Num, Show)
-newtype FAdr = FAdr Word32 deriving (Num, Show) -- Frame address within a chain.
-newtype EAdr = EAdr Word32 deriving (Num, Show) -- Data address within frame.
-newtype IAdr = IAdr Word32 deriving (Num, Show) -- Instruction address.
-newtype Atom = Atom Int32  deriving (Num, Show) -- Atomic data value.
+newtype Size
+  = Size Word32
+  deriving (Eq, Ord, Enum, Num, Real, Integral, Show)
+
+newtype FrmAdr -- Frame chain address
+  = FrmAdr Word32
+  deriving (Eq, Ord, Enum, Num, Real, Integral, Show)
+
+newtype EnvAdr -- Environment address.
+  = EnvAdr Word32
+  deriving (Eq, Ord, Enum, Num, Real, Integral, Show)
+
+newtype InsAdr -- Instruction address.
+  = InsAdr Word32
+  deriving (Eq, Ord, Enum, Num, Real, Integral, Show)
+
+newtype Atom -- Atomic machine-sized integer.
+  = Atom Int32
+  deriving (Eq, Ord, Enum, Num, Real, Integral, Show)
 
 data Code
-  = LDC Atom | LD FAdr EAdr
+  = LDC Atom | LD FrmAdr EnvAdr
   | CArith Arith
   | ATOM | CONS | CAR | CDR
   | SEL | JOIN
-  | LDF IAdr | AP Size | RTN
+  | LDF InsAdr | AP Size | RTN
   | DUM Size | RAP Size
   | STOP
   deriving Show
