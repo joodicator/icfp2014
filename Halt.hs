@@ -1,18 +1,21 @@
 module Halt where
 
 import Control.Applicative
+import Control.Monad.Identity
 import Control.Monad.Trans.Class
 import Control.Monad.IO.Class
 
 --------------------------------------------------------------------------------
 newtype HaltT e m a
-  = HaltT{ unHaltT :: m (Either e a) }
+  = HaltT{ runHaltT :: m (Either e a) }
+
+type Halt e a = HaltT e Identity a
 
 instance Monad m => Monad (HaltT e m) where
     HaltT m >>= f
       = HaltT $ m >>= \e -> case e of
             Left e' -> return (Left e')
-            Right x -> unHaltT (f x)
+            Right x -> runHaltT (f x)
     return x = HaltT (return (Right x))
 
 instance Monad m => Applicative (HaltT e m) where
@@ -24,6 +27,9 @@ instance Monad m => Functor (HaltT e m) where
 
 halt :: Monad m => e -> HaltT e m a
 halt e = HaltT (return (Left e))
+
+catchHalt :: Monad m => HaltT e m a -> HaltT e m (Either e a)
+catchHalt (HaltT m) = HaltT (m >>= return . Right)
 
 --------------------------------------------------------------------------------
 instance MonadTrans (HaltT e) where
