@@ -29,7 +29,7 @@ data Code
   = LDC Atom | LD FrmAdr EnvAdr
   | CArith Arith
   | ATOM | CONS | CAR | CDR
-  | SEL | JOIN
+  | SEL InsAdr InsAdr | JOIN
   | LDF InsAdr | AP Size | RTN
   | DUM Size | RAP Size
   | STOP
