@@ -27,6 +27,11 @@ data Word
   | WCons (IORef Cons)
   | WClos (IORef Closure)
 
+instance Show Word where
+    show (WAtom x) = "WAtom " ++ show (fromIntegral x)
+    show (WCons _) = "<WCons>"
+    show (WClos _) = "<WClos>"
+
 -- A CONS cell.
 data Cons
   = Cons{ car::Word, cdr::Word }
@@ -64,6 +69,13 @@ data Heap
   | HReturn (Weak (IORef Return))
   | HStack  (Weak (IORef Stack))
 
+instance Show Heap where
+    show (HCons   _) = "<HCons>"
+    show (HClos   _) = "<HClos>"
+    show (HFrame  _) = "<HFrame>"
+    show (HReturn _) = "<HReturn>"
+    show (HStack  _) = "<HStack>"
+
 -- The resource limits of a GCC instance.
 data Limits = Limits{   
     lHeapSize::Size,  -- Heap memory size, where a CONS cell occupies 2 units.
@@ -84,7 +96,7 @@ data GCCState = GCCState{
     gReturn :: Maybe (IORef Return) } -- Control stack.
 
 instance Show GCCState where
-    show _ = "<<GCCState>>"
+    show _ = "<GCCState>"
 
 stdEmptyState = GCCState{
     gLimits = stdLimits,
@@ -138,17 +150,17 @@ runUntilStop = do
 -- Execute a single instruction.
 step :: GCC ()
 step = do
-    s@GCCState{ gPC=pc, gCode=code } <- lift get
+    GCCState{ gPC=pc, gCode=code } <- lift get
     unless (pc < length code) (halt $ Fault PCOutOfBounds)
-    lift $ put s{ gPC=(pc+1) }
+    lift . modify $ \s -> s{ gPC=(pc+1) }
     instr (code !! pc)
 
 -- Load a program into code memory, replacing any previous program.
 loadProgram :: [Code] -> GCC ()
 loadProgram code = do
-    s@GCCState{ gLimits=Limits{ lCodeSize=maxSize } } <- lift get
-    unless (length code < maxSize) (halt $ Fault CodeOverflow)
-    lift $ put s{ gCode=code }
+    GCCState{ gLimits=Limits{ lCodeSize=maxSize } } <- lift get
+    unless (length code <= maxSize) (halt $ Fault CodeOverflow)
+    lift . modify $ \s -> s{ gCode=code }
 
 --------------------------------------------------------------------------------
 -- Execute the given instruction, assuming the PC has already been incremented.
@@ -191,9 +203,10 @@ instr CDR = do
 instr (SEL trueAdr falseAdr) = do
     popStack 1 >>= \p -> case p of
         [WAtom x] -> do
-            s@GCCState{ gPC=pc } <- lift get
+            pc <- lift $ gets gPC
             pushReturn ReturnJoin{ rPC=pc, rParent=Nothing }
-            lift $ put s{ gPC=(if x /= 0 then trueAdr else falseAdr) }
+            let pc' = if x /= 0 then trueAdr else falseAdr
+            lift . modify $ \s -> s{ gPC=pc' }
         [_] -> halt $ Fault TypeMismatch
 
 instr JOIN = do
@@ -207,7 +220,7 @@ instr (LDF insAdr) = do
     pushStack (WClos ref)
 
 instr (AP size) = do
-    s@GCCState{ gPC=oldPC, gFrame=oldFrm, gReturn=oldRet } <- lift get
+    GCCState{ gPC=oldPC, gFrame=oldFrm, gReturn=oldRet } <- lift get
     popStack 1 >>= \p -> case p of
         [WClos cloRef] -> do
             Closure{ cCode=newPC, cFrame=cloFrm } <- liftIO $ readIORef cloRef
@@ -215,7 +228,7 @@ instr (AP size) = do
             newFrm <- alloc HFrame Frame{
                 fParent=cloFrm, fData=args, fDummy=False }
             pushReturn ReturnCall{ rPC=oldPC, rFrame=oldFrm, rParent=Nothing }
-            lift $ put s{ gPC=newPC, gFrame=(Just newFrm) }
+            lift . modify $ \s -> s{ gPC=newPC, gFrame=(Just newFrm) }
         [_] -> halt $ Fault TypeMismatch
 
 instr RTN = do
@@ -229,7 +242,7 @@ instr (DUM size) = do
     s@GCCState{ gFrame=oldFrm } <- lift get
     let args = replicate size (WAtom 0)
     newFrm <- alloc HFrame Frame{ fParent=oldFrm, fDummy=True, fData=args }
-    lift $ put s{ gFrame=(Just newFrm) }
+    lift . modify $ \s -> s{ gFrame=(Just newFrm) }
 
 instr (RAP size) = do
     [word] <- popStack 1
@@ -244,7 +257,7 @@ instr (RAP size) = do
             pushReturn ReturnCall{ rPC=oldPC, rFrame=retFrm, rParent=Nothing }
             args' <- popStack size
             liftIO $ writeIORef frmRef frm{ fData=args', fDummy=False }
-            lift $ put s{ gPC=cloPC }
+            lift . modify $ \s -> s{ gPC=cloPC }
         (_, Just _)  -> halt $ Fault TypeMismatch
         (_, Nothing) -> halt $ Fault ControlUnderflow
 
@@ -267,17 +280,17 @@ arith op x y = case op of
 -- Push an element onto the data stack.
 pushStack :: Word -> GCC ()
 pushStack x = do
-    s@GCCState{ gData=ss } <- lift get
-    ref <- alloc HStack Stack{ sParent=ss, sData=x }
-    lift $ put s{ gData=(Just ref) }
+    top <- lift $ gets gData
+    ref <- alloc HStack Stack{ sParent=top, sData=x }
+    lift . modify $ \s -> s{ gData=(Just ref) }
 
 -- Pop n elements from the data stack and return them in the order in which
 -- they were pushed.
 popStack :: Size -> GCC [Word]
 popStack n = do
-  s@GCCState{ gData=top } <- lift get
+  top <- lift $ gets gData
   (ws, top') <- popStack' n ([], top)
-  lift $ put s{ gData=top' }
+  lift . modify $ \s -> s{ gData=top' }
   return (reverse ws)
   where
     popStack' 0 args = do
@@ -288,23 +301,34 @@ popStack n = do
         Stack{ sParent=mr', sData=w } <- liftIO $ readIORef r
         popStack' (n-1) (w:ws, mr')
 
+-- Return a list representing the data stack.
+listStack :: GCC [Word]
+listStack = do
+    top <- lift $ gets gData
+    listStack' top
+  where
+    listStack' (Just ref) = do
+        Stack{ sParent=par, sData=word } <- liftIO $ readIORef ref
+        (word :) <$> listStack' par
+    listStack' Nothing = return []
+
 -- Pop an entry from the control stack and return it.
 popReturn :: GCC Return
 popReturn = do
-    s@GCCState{ gReturn=mref } <- lift get
+    mref <- lift $ gets gReturn
     mret <- sequence $ liftIO . readIORef <$> mref
     case mret of
         Just ret -> do
-            lift $ put s{ gReturn=(rParent ret) }
+            lift . modify $ \s -> s{ gReturn=(rParent ret) }
             return ret
         Nothing -> halt $ Fault ControlUnderflow
 
 -- Push an entry onto the control stack, changing its rParent field.
 pushReturn :: Return -> GCC ()
 pushReturn ret = do
-    s@GCCState{ gReturn=oldRet } <- lift get
+    oldRet <- lift $ gets gReturn
     ref <- alloc HReturn ret{ rParent=oldRet }
-    lift $ put s{ gReturn=(Just ref) }
+    lift . modify $ \s -> s{ gReturn=(Just ref) }
 
 -- Return an IORef to the frame at the given address.
 getFrame :: FrmAdr -> GCC (IORef Frame)
@@ -326,19 +350,19 @@ alloc con obj = do
     wkRef <- liftIO $ mkWeakIORef ioRef (return ())
     let heapObj = con wkRef
 
-    s@GCCState{ gHeap=hs, gLimits=Limits{ lHeapSize=hSizeMax } } <- lift get
+    GCCState{ gHeap=hs, gLimits=Limits{ lHeapSize=hSizeMax } } <- lift get
     hSize <- gc; oSize <- size heapObj
     when (hSize + oSize > hSizeMax) (halt $ Fault HeapOverflow)
 
-    lift $ put s{ gHeap=heapObj:hs }
+    lift . modify $ \s -> s{ gHeap=heapObj:hs }
     return ioRef
 
 -- Perform garbage collection, reporting the amount of heap space in use.
 gc :: GCC Size
 gc = do
-    s@GCCState{ gHeap=heap } <- lift get
+    heap <- lift $ gets gHeap
     sizes <- mapM size heap
-    lift $ put s{ gHeap=[h | (h,sz) <- zip heap sizes, sz > 0] }
+    lift . modify $ \s -> s{ gHeap=[h | (h,sz) <- zip heap sizes, sz > 0] }
     return (sum sizes)
 
 -- The space occupied in the heap by the given object,
