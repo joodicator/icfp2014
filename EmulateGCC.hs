@@ -175,7 +175,7 @@ instr (LD frmAdr envAdr) = do
     unless (envAdr < length xs) (halt $ Fault DataOutOfBounds)
     pushStack (xs !! envAdr)
 
-instr (CArith op)
+instr (Arith op)
   = popStack 2 >>= \p -> case p of
         [WAtom x, WAtom y] -> pushStack $ WAtom (arith op x y)
         [_, _]             -> halt $ Fault TypeMismatch
